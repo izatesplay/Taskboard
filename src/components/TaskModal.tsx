@@ -1,0 +1,1032 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useEffect } from 'react';
+import { Task, TaskPriority, TaskStatus, User, Note, ChatMessage, TaskAlarm, ChecklistItem } from '../types';
+import { getDynamicUsers } from '../mockData';
+import { 
+  X, 
+  Plus, 
+  MessageSquare, 
+  UserPlus, 
+  Calendar, 
+  UserCheck, 
+  FileText, 
+  ArrowLeft,
+  Edit2,
+  Trash2,
+  BellRing,
+  Send,
+  Paperclip,
+  Download,
+  File,
+  Image,
+  AlertCircle,
+  Clock
+} from 'lucide-react';
+
+interface TaskModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSubmit: (taskData: Omit<Task, 'id' | 'createdAt' | 'notes'> & { id?: string; notes?: Note[]; chatMessages?: ChatMessage[]; alarms?: TaskAlarm[] }) => void;
+  taskToEdit?: Task | null;
+  currentUser: User;
+}
+
+export default function TaskModal({
+  isOpen,
+  onClose,
+  onSubmit,
+  taskToEdit,
+  currentUser,
+}: TaskModalProps) {
+  const mockUsers = getDynamicUsers();
+  const isEditMode = !!taskToEdit;
+  const canEditTitleAndDate = !taskToEdit ? true : (!taskToEdit.creatorId || taskToEdit.creatorId === currentUser.id);
+  
+  // Tab control for existing tasks: details/comments vs editing specifications
+  const [activeTab, setActiveTab] = useState<'details' | 'alarms' | 'edit'>('details');
+
+  // Alarm Timers states
+  const [alarms, setAlarms] = useState<TaskAlarm[]>([]);
+  const [alarmTargetUserId, setAlarmTargetUserId] = useState(currentUser.id);
+  const [alarmNote, setAlarmNote] = useState('');
+  const [alarmMode, setAlarmMode] = useState<'preset' | 'custom'>('preset');
+  const [alarmMinutesPreset, setAlarmMinutesPreset] = useState('5'); // default 5 minutes
+  const [alarmCustomDateTime, setAlarmCustomDateTime] = useState(''); // manually-picked date/time format YYYY-MM-DDTHH:MM
+
+  // Form states
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [status, setStatus] = useState<TaskStatus>('todo');
+  const [priority, setPriority] = useState<TaskPriority>('medium');
+  const [assignedUsers, setAssignedUsers] = useState<string[]>([]);
+  const [dueDate, setDueDate] = useState('1405-03-10');
+  const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
+  const [newChecklistItemText, setNewChecklistItemText] = useState('');
+
+  // Chat message & attachment states
+  const [chatText, setChatText] = useState('');
+  const [attachedFile, setAttachedFile] = useState<{ name: string; type: string; size: string; base64?: string } | null>(null);
+  const [isTyping, setIsTyping] = useState(false);
+  const [typingUser, setTypingUser] = useState('');
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Local task chat messages loading
+  useEffect(() => {
+    if (isOpen && taskToEdit) {
+      setIsLoadingMessages(true);
+      setMessages(taskToEdit.chatMessages || []);
+      setIsLoadingMessages(false);
+    } else {
+      setMessages([]);
+    }
+  }, [isOpen, taskToEdit?.id, taskToEdit?.chatMessages]);
+
+  // Reset form when modal opens or task changes
+  useEffect(() => {
+    if (taskToEdit) {
+      setTitle(taskToEdit.title);
+      setDescription(taskToEdit.description);
+      setStatus(taskToEdit.status);
+      setPriority(taskToEdit.priority);
+      setAssignedUsers(taskToEdit.assignedUsers);
+      setDueDate(taskToEdit.dueDate);
+      setAlarms(taskToEdit.alarms || []);
+      setChecklist(taskToEdit.checklist || []);
+      setActiveTab('details');
+    } else {
+      setTitle('');
+      setDescription('');
+      setStatus('todo');
+      setPriority('medium');
+      setAssignedUsers([currentUser.id]);
+      // Default due date to roughly 7 days from now
+      setDueDate('1405-03-15');
+      setAlarms([]);
+      setChecklist([]);
+      setActiveTab('edit');
+    }
+    setChatText('');
+    setAttachedFile(null);
+    setIsTyping(false);
+    setAlarmTargetUserId(currentUser.id);
+    setAlarmNote('');
+    setAlarmMode('preset');
+    setAlarmMinutesPreset('5');
+    setAlarmCustomDateTime('');
+  }, [taskToEdit, isOpen]);
+
+  if (!isOpen) return null;
+
+  // Toggle assigned operator selection
+  const handleToggleUser = (userId: string) => {
+    setAssignedUsers((prev) =>
+      prev.includes(userId)
+        ? prev.filter((id) => id !== userId)
+        : [...prev, userId]
+    );
+  };
+
+  const isSupervisor = currentUser?.role === 'مدیر شیفت کالسنتر' || currentUser?.role?.includes('سرپرست') || currentUser?.role?.includes('سوپروایزر') || currentUser?.id === 'user_1' || currentUser?.id === 'user_admin';
+
+  const formatAlarmTime = (isoString: string) => {
+    try {
+      const d = new Date(isoString);
+      if (isNaN(d.getTime())) return isoString;
+      return d.toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' }) + ' - ' + d.toLocaleDateString('fa-IR');
+    } catch (e) {
+      return isoString;
+    }
+  };
+
+  const handleAddAlarm = () => {
+    let calculatedTime: Date;
+    if (alarmMode === 'preset') {
+      const minutes = parseInt(alarmMinutesPreset, 10);
+      calculatedTime = new Date(Date.now() + minutes * 60 * 1000);
+    } else {
+      if (!alarmCustomDateTime) {
+        alert('لطفا تاریخ و زمان دستی برای هشدار را انتخاب کنید.');
+        return;
+      }
+      calculatedTime = new Date(alarmCustomDateTime);
+      if (isNaN(calculatedTime.getTime())) {
+        alert('زمان انتخابی نامعتبر است.');
+        return;
+      }
+    }
+
+    const matchedUser = mockUsers.find(u => u.id === alarmTargetUserId);
+    if (!matchedUser) return;
+
+    const freshAlarm: TaskAlarm = {
+      id: 'alarm_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+      targetUserId: alarmTargetUserId,
+      targetUserName: matchedUser.name,
+      triggerTime: calculatedTime.toISOString(),
+      note: alarmNote.trim() || undefined,
+      triggered: false,
+      createdAt: new Date().toISOString(),
+      creatorId: currentUser.id,
+      creatorName: currentUser.name,
+    };
+
+    const updatedAlarms = [...alarms, freshAlarm];
+    setAlarms(updatedAlarms);
+    setAlarmNote('');
+    
+    onSubmit({
+      ...taskToEdit!,
+      alarms: updatedAlarms
+    });
+  };
+
+  const handleRemoveAlarm = (alarmId: string) => {
+    const updatedAlarms = alarms.filter(a => a.id !== alarmId);
+    setAlarms(updatedAlarms);
+    onSubmit({
+      ...taskToEdit!,
+      alarms: updatedAlarms
+    });
+  };
+
+  const handleFormSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim()) {
+      alert('لطفاً عنوان تسک را وارد نمایید.');
+      return;
+    }
+
+    onSubmit({
+      id: taskToEdit?.id,
+      title: title.trim(),
+      description: description.trim(),
+      status,
+      priority,
+      assignedUsers,
+      dueDate,
+      notes: taskToEdit ? taskToEdit.notes : [],
+      chatMessages: messages,
+      alarms: alarms,
+      checklist: checklist,
+    });
+
+    onClose();
+  };
+
+  // Handle Attachment Selection and Base64 Conversion
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setAttachedFile({
+        name: file.name,
+        type: file.type,
+        size: (file.size / 1024).toFixed(1) + ' KB',
+        base64: reader.result as string
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Submit in-app Chat message & trigger real-time simulated reply subscriptions
+  const handleSendChat = (e: React.FormEvent) => {
+    e.preventDefault();
+    if ((!chatText.trim() && !attachedFile) || !taskToEdit) return;
+
+    const messageId = 'msg_' + Date.now();
+    const freshMessage: ChatMessage = {
+      id: messageId,
+      taskId: taskToEdit.id,
+      senderId: currentUser.id,
+      senderName: currentUser.name,
+      messageText: chatText.trim() || (attachedFile ? `📎 فایل پیوست شد: ${attachedFile.name}` : ''),
+      timestamp: new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' }),
+      ...(attachedFile ? { fileAttachment: attachedFile } : {})
+    };
+
+    const updatedMessages = [...messages, freshMessage];
+    setMessages(updatedMessages);
+
+    // Persist message on submit
+    onSubmit({
+      ...taskToEdit,
+      chatMessages: updatedMessages
+    });
+
+    setChatText('');
+    setAttachedFile(null);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/45 dark:bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-hidden shadow-2xl flex flex-col md:flex-row">
+        
+        {/* Right Info Section for existing tasks - Details / Notes feed */}
+        {isEditMode && activeTab === 'details' && (
+          <div className="flex-1 p-5 border-b md:border-b-0 md:border-l border-slate-105 border-slate-100 dark:border-slate-805 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/20 max-h-[55vh] md:max-h-[90vh] overflow-hidden flex flex-col justify-between">
+            <div className="flex flex-col h-full overflow-hidden">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 mb-3 shrink-0">
+                <h3 className="text-xs sm:text-sm font-black text-slate-800 dark:text-slate-200">💬 چت درون‌برنامه‌ای تسک</h3>
+                {isLoadingMessages ? (
+                  <span className="text-[9px] text-purple-400 animate-pulse">در حال بارگذاری...</span>
+                ) : (
+                  <span className="text-[10px] bg-purple-100 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 px-2 py-0.5 rounded-full font-mono font-bold">
+                    {messages.length} پیام فعال
+                  </span>
+                )}
+              </div>
+
+              {/* Chat timeline bubbles */}
+              <div className="flex-grow space-y-3.5 overflow-y-auto pr-1 text-right mb-3 min-h-[180px] md:min-h-[300px] flex flex-col justify-end">
+                <div className="space-y-3.5 overflow-y-auto max-h-[250px] md:max-h-[420px]">
+                  {messages.length > 0 ? (
+                    messages.map((msg) => {
+                      const isMe = msg.senderId === currentUser.id;
+                      const userObj = mockUsers.find(u => u.id === msg.senderId);
+                      return (
+                        <div 
+                          key={msg.id} 
+                          className={`flex items-start gap-2 ${isMe ? 'flex-row-reverse' : 'flex-row'}`}
+                        >
+                          {/* Avatar block */}
+                          <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0 ${userObj?.avatarColor || 'bg-slate-400'} ${userObj?.textColor || 'text-white'}`}>
+                            {userObj?.initials || msg.senderName.substring(0,2)}
+                          </div>
+                          
+                          {/* Bubble component */}
+                          <div className="max-w-[80%] space-y-1">
+                            <div className={`flex items-center gap-1.5 text-[9px] text-slate-400 ${isMe ? 'justify-end' : 'justify-start'}`}>
+                              <span className="font-bold text-slate-600 dark:text-slate-300">{msg.senderName}</span>
+                              <span className="font-mono">{msg.timestamp}</span>
+                            </div>
+                            
+                            <div className={`p-3 rounded-2xl text-xs leading-relaxed break-words whitespace-pre-wrap ${
+                              isMe 
+                                ? 'bg-purple-600 text-white rounded-tr-none' 
+                                : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 rounded-tl-none'
+                            }`}>
+                              <p>{msg.messageText}</p>
+                              
+                              {/* Attachment layout widget */}
+                              {msg.fileAttachment && (
+                                <div className={`mt-2 p-2 rounded-xl flex items-center justify-between gap-4 text-[10px] border ${
+                                  isMe 
+                                    ? 'bg-purple-700/40 border-purple-500/30 text-purple-100' 
+                                    : 'bg-slate-50 dark:bg-slate-950/40 border-slate-100 dark:border-slate-800 text-slate-600 dark:text-slate-400'
+                                }`}>
+                                  <div className="flex items-center gap-1.5 overflow-hidden">
+                                    {msg.fileAttachment.type.startsWith('image/') ? (
+                                      <Image className="w-3.5 h-3.5 shrink-0 text-purple-300" />
+                                    ) : (
+                                      <File className="w-3.5 h-3.5 shrink-0 text-purple-300" />
+                                    )}
+                                    <span className="truncate max-w-[100px] font-bold" title={msg.fileAttachment.name}>
+                                      {msg.fileAttachment.name}
+                                    </span>
+                                    <span className="opacity-70 text-[8px]">({msg.fileAttachment.size})</span>
+                                  </div>
+                                  
+                                  {msg.fileAttachment.base64 && (
+                                    <a 
+                                      href={msg.fileAttachment.base64} 
+                                      download={msg.fileAttachment.name}
+                                      className="p-1 hover:bg-black/10 dark:hover:bg-white/10 rounded-md transition-colors"
+                                      title="دانلود فایل پیوست"
+                                    >
+                                      <Download className="w-3 h-3" />
+                                    </a>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="text-center py-10 text-slate-400/80 italic text-xs">
+                      💬 هنوز گفتگویی شروع نشده است. پیام اول را شما بنویسید!
+                    </div>
+                  )}
+
+                  {/* Typing Indicator */}
+                  {isTyping && (
+                    <div className="flex items-start gap-2 flex-row">
+                      <div className="w-7 h-7 rounded-full bg-slate-300 dark:bg-slate-800 flex items-center justify-center text-[9px] font-bold text-slate-500 animate-pulse shrink-0">
+                        ...
+                      </div>
+                      <div className="max-w-[80%] space-y-1">
+                        <span className="text-[9px] text-slate-400 font-bold">{typingUser} در حال نوشتن...</span>
+                        <div className="bg-slate-100 dark:bg-slate-800/80 text-slate-500 text-xs px-3 py-2 rounded-2xl rounded-tl-none inline-flex items-center gap-1 animate-pulse">
+                          <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                          <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                          <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Chat attachments pre-send label block */}
+            <form onSubmit={handleSendChat} className="mt-2 pt-3 border-t border-slate-150 dark:border-slate-800/80 shrink-0">
+              {attachedFile && (
+                <div className="mb-2 p-1.5 bg-purple-500/10 dark:bg-purple-500/15 border border-purple-400/40 rounded-xl flex items-center justify-between text-[10px]">
+                  <span className="text-purple-700 dark:text-purple-300 font-bold truncate">
+                    📎 آماده پیوست: {attachedFile.name} ({attachedFile.size})
+                  </span>
+                  <button 
+                    type="button" 
+                    onClick={() => setAttachedFile(null)} 
+                    className="text-red-500 hover:text-red-700 text-xs px-1"
+                  >
+                    حذف
+                  </button>
+                </div>
+              )}
+
+              <div className="text-[10px] text-slate-400 mb-1.5 flex items-center justify-between">
+                <span>ارسال پاسخ از طرف: <b>{currentUser.name}</b></span>
+                <span className="text-slate-400">نقش: {currentUser.role}</span>
+              </div>
+              
+              <div className="relative flex items-center gap-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-1.5 focus-within:ring-1 focus-within:ring-purple-500">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="p-2 text-slate-400 hover:text-purple-600 hover:bg-purple-55 border-slate-50 hover:bg-purple-50 dark:hover:bg-purple-950/30 rounded-xl cursor-pointer transition-colors shrink-0"
+                  title="پیوست سند یا فایل"
+                >
+                  <Paperclip className="w-4 h-4" />
+                </button>
+                
+                <input 
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileChange}
+                  className="hidden"
+                />
+
+                <input
+                  type="text"
+                  value={chatText}
+                  onChange={(e) => setChatText(e.target.value)}
+                  placeholder="پیامی بنویسید یا سندی پیوست کنید..."
+                  className="flex-grow text-xs bg-transparent border-none outline-none text-slate-800 dark:text-slate-200"
+                />
+
+                <button
+                  type="submit"
+                  disabled={!chatText.trim() && !attachedFile}
+                  className="p-2 bg-purple-600 text-white hover:bg-purple-700 disabled:bg-slate-100 disabled:text-slate-400 dark:disabled:bg-slate-800 dark:disabled:text-slate-600 rounded-xl cursor-pointer transition-colors shrink-0"
+                  title="ارسال پیام"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* Core Form Section for creating or specifications edit */}
+        <div className="flex-1 flex flex-col justify-between max-h-[85vh] md:max-h-[90vh] overflow-y-auto">
+          {/* modal Header */}
+          <div className="p-6 pb-4 border-b border-slate-100 dark:border-slate-800/80 flex items-center justify-between bg-slate-50/20 dark:bg-slate-900/10">
+            <div>
+              <h2 className="text-base sm:text-lg font-bold text-slate-800 dark:text-slate-100">
+                {isEditMode 
+                  ? (activeTab === 'edit' ? 'ویرایش مشخصات وظیفه' : activeTab === 'alarms' ? 'تنظیم یادآوری و آلارم تماس' : 'جزئیات کار و اطلاعات تماسی') 
+                  : 'ایجاد تسک جدید برای کالسنتر'}
+              </h2>
+              <p className="text-[10px] text-slate-400 mt-0.5">ثبت گزارش کار کادر پاسخگویی مرکز تماس</p>
+            </div>
+            
+            <button
+              onClick={onClose}
+              className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Edit / Details Toggle tabs for editing tasks */}
+          {isEditMode && (
+            <div className="px-6 pt-3 flex border-b border-slate-100 dark:border-slate-800/60 bg-slate-50/10 gap-3 sm:gap-4 overflow-x-auto text-nowrap">
+              <button
+                type="button"
+                onClick={() => setActiveTab('details')}
+                className={`pb-2.5 text-xs font-bold transition-all border-b-2 px-1 cursor-pointer ${
+                  activeTab === 'details'
+                    ? 'border-purple-600 text-purple-600 dark:text-purple-400'
+                    : 'border-transparent text-slate-400 hover:text-slate-600'
+                }`}
+              >
+                💬 چت درون‌برنامه‌ای و گزارش کار
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('alarms')}
+                className={`pb-2.5 text-xs font-bold transition-all border-b-2 px-1 cursor-pointer ${
+                  activeTab === 'alarms'
+                    ? 'border-purple-600 text-purple-600 dark:text-purple-400'
+                    : 'border-transparent text-slate-400 hover:text-slate-600'
+                }`}
+              >
+                ⏰ تایمر هشدار و آلارم
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('edit')}
+                className={`pb-2.5 text-xs font-bold transition-all border-b-2 px-1 cursor-pointer ${
+                  activeTab === 'edit'
+                    ? 'border-purple-600 text-purple-600 dark:text-purple-400'
+                    : 'border-transparent text-slate-400 hover:text-slate-600'
+                }`}
+              >
+                ⚙️ ویرایش پارامترها و اپراتورها
+              </button>
+            </div>
+          )}
+
+          {/* Form Content */}
+          <form onSubmit={handleFormSubmit} className="p-6 space-y-4 flex-grow">
+            
+            {/* View Only Mode (when viewing details of existing task) */}
+            {isEditMode && activeTab === 'details' && (
+              <div className="space-y-4 text-right">
+                <div className="space-y-1">
+                  <span className="text-[11px] text-slate-400 font-bold block">عنوان وظیفه:</span>
+                  <p className="text-sm font-bold text-slate-800 dark:text-slate-100 bg-slate-50 dark:bg-slate-950/40 p-3 rounded-xl border border-slate-100 dark:border-slate-850">
+                    {taskToEdit.title}
+                  </p>
+                </div>
+
+                <div className="space-y-1">
+                  <span className="text-[11px] text-slate-400 font-bold block">توضیحات کلی / سناریو تماس:</span>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed bg-slate-50 dark:bg-slate-950/40 p-3.5 rounded-xl border border-slate-100 dark:border-slate-850 h-28 overflow-y-auto whitespace-pre-line text-justify">
+                    {taskToEdit.description || 'توضیحی ثبت نگردیده.'}
+                  </p>
+                </div>
+
+                {/* Interactive Task Checklist Section */}
+                {taskToEdit.checklist && taskToEdit.checklist.length > 0 && (
+                  <div className="space-y-2 bg-gradient-to-tr from-purple-500/5 to-indigo-500/5 dark:from-purple-950/10 dark:to-indigo-950/5 border border-purple-500/10 dark:border-purple-500/10 p-3.5 rounded-2xl text-right shadow-xs">
+                    <span className="text-[11.5px] text-purple-650 dark:text-purple-400 font-extrabold block mb-1">🛠️ بخش‌های مأموریت تماس (چک‌لیست اقدامات فرعی):</span>
+                    <div className="space-y-2.5 max-h-[145px] overflow-y-auto">
+                      {taskToEdit.checklist.map((item) => (
+                        <label 
+                          key={item.id} 
+                          className="flex items-center gap-2.5 cursor-pointer select-none group text-xs text-slate-700 dark:text-slate-300"
+                        >
+                          <input 
+                            type="checkbox"
+                            checked={item.completed}
+                            onChange={() => {
+                              const updatedChecklist = (taskToEdit.checklist || []).map(ch => 
+                                ch.id === item.id ? { ...ch, completed: !ch.completed } : ch
+                              );
+                              onSubmit({
+                                ...taskToEdit,
+                                checklist: updatedChecklist
+                              });
+                            }}
+                            className="w-4 h-4 rounded text-purple-600 dark:bg-slate-950 border-slate-200 dark:border-slate-700 focus:ring-purple-500 cursor-pointer"
+                          />
+                          <span className={`transition-all duration-200 ${item.completed ? 'line-through text-slate-400 font-medium' : 'font-semibold text-slate-800 dark:text-slate-200'}`}>
+                            {item.text}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Badges indicators row */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="p-2.5 bg-slate-50 dark:bg-slate-950/30 rounded-xl border border-slate-100 dark:border-slate-850 text-center">
+                    <span className="text-[10px] text-slate-400 block mb-0.5">وضعیت کار</span>
+                    <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                      {taskToEdit.status === 'todo' ? '📋 منتظر' : taskToEdit.status === 'in_progress' ? '⚡ در حال انجام' : '✅ انجام شده'}
+                    </span>
+                  </div>
+                  <div className="p-2.5 bg-slate-50 dark:bg-slate-950/30 rounded-xl border border-slate-100 dark:border-slate-850 text-center">
+                    <span className="text-[10px] text-slate-400 block mb-0.5">سطح اولویت</span>
+                    <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                      {taskToEdit.priority === 'urgent' ? '🔴 فوری' : taskToEdit.priority === 'high' ? '🟠 مهم' : taskToEdit.priority === 'medium' ? '🔵 متوسط' : '🟢 عادی'}
+                    </span>
+                  </div>
+                  <div className="p-2.5 bg-slate-50 dark:bg-slate-950/30 rounded-xl border border-slate-100 dark:border-slate-850 text-center">
+                    <span className="text-[10px] text-slate-400 block mb-0.5">مهلت سررسید</span>
+                    <span className="text-xs font-bold font-mono text-slate-700 dark:text-slate-300">{taskToEdit.dueDate}</span>
+                  </div>
+                </div>
+
+                {/* Team Grid Stack */}
+                <div className="space-y-1">
+                  <span className="text-[11px] text-slate-400 font-bold block mb-1">اپراتورهای مسئول تماس:</span>
+                  <div className="flex flex-wrap gap-2">
+                    {mockUsers.filter(u => taskToEdit.assignedUsers.includes(u.id)).map(user => (
+                      <div 
+                        key={user.id} 
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 dark:bg-slate-800 rounded-full border border-slate-200 dark:border-slate-700 text-xs text-slate-700 dark:text-slate-300"
+                      >
+                        <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[8px] font-bold ${user.avatarColor} ${user.textColor}`}>
+                          {user.initials}
+                        </span>
+                        <span>{user.name}</span>
+                      </div>
+                    ))}
+                    {taskToEdit.assignedUsers.length === 0 && (
+                      <span className="text-xs text-slate-400 italic">هیچ همکاری مسئول این تسک نشده است.</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {isEditMode && activeTab === 'alarms' && (
+              <div className="space-y-5 text-right">
+                {/* Alert notification banner explaining permission boundaries */}
+                <div className="p-3 bg-purple-500/10 border border-purple-500/25 rounded-2xl flex items-center gap-2">
+                  <BellRing className="w-5 h-5 text-purple-500 shrink-0 animate-bounce" />
+                  <div>
+                    <p className="text-xs font-bold text-purple-700 dark:text-purple-400">سیستم هوشمند آلارم و هشدار یادآوری تماس</p>
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">در زمان تعیین شده، سیستم شروع به پخش صدای آلارم کرده و پاپ‌آپ اخطار را به اپراتور نمایش می‌دهد.</p>
+                  </div>
+                </div>
+
+                {/* Section: Create Alarm Timer Form */}
+                <div className="p-4 bg-slate-50 dark:bg-slate-950/40 rounded-2xl border border-slate-100 dark:border-slate-800 space-y-3.5">
+                  <h3 className="text-xs font-black text-slate-800 dark:text-slate-200">🚀 تنظیم تایمر آلارم جدید</h3>
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {/* Field 1: Target User */}
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-slate-500 mr-1 block">کاربر هدف آلارم *</label>
+                      {isSupervisor ? (
+                        <select
+                          value={alarmTargetUserId}
+                          onChange={(e) => setAlarmTargetUserId(e.target.value)}
+                          className="w-full text-xs p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-1 focus:ring-purple-500 outline-none text-slate-800 dark:text-slate-100"
+                        >
+                          {mockUsers.map(u => (
+                            <option key={u.id} value={u.id}>
+                              {u.name} ({u.role})
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className="w-full text-xs p-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 rounded-xl">
+                          {currentUser.name} (یادآور برای خودم)
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Field 2: Mode Toggle */}
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-slate-500 mr-1 block">نوع زمان‌بندی زنگ *</label>
+                      <div className="grid grid-cols-2 gap-2 bg-white dark:bg-slate-900 p-1 border border-slate-200 dark:border-slate-700 rounded-xl">
+                        <button
+                          type="button"
+                          onClick={() => setAlarmMode('preset')}
+                          className={`py-1.5 text-[10px] font-bold rounded-lg transition-all cursor-pointer ${
+                            alarmMode === 'preset'
+                              ? 'bg-purple-600 text-white shadow-xs'
+                              : 'text-slate-500 hover:text-slate-800 dark:text-slate-400'
+                          }`}
+                        >
+                          ⏱️ تایمر سریع (دقیقه)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAlarmMode('custom')}
+                          className={`py-1.5 text-[10px] font-bold rounded-lg transition-all cursor-pointer ${
+                            alarmMode === 'custom'
+                              ? 'bg-purple-600 text-white shadow-xs'
+                              : 'text-slate-500 hover:text-slate-800 dark:text-slate-400'
+                          }`}
+                        >
+                          📅 تاریخ و ساعت دستی
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Conditional Time Pickers */}
+                  {alarmMode === 'preset' ? (
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-slate-500 mr-1 block">زمان زنگ هشدار (سریع) *</label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {[
+                          { label: '🟢 ۱ دقیقه (تست زنده)', value: '1' },
+                          { label: '⏱️ ۵ دقیقه', value: '5' },
+                          { label: '⏱️ ۱۵ دقیقه', value: '15' },
+                          { label: '⏱️ ۳۰ دقیقه', value: '30' },
+                          { label: '⏱️ ۱ ساعت', value: '60' },
+                          { label: '⏱️ ۲ ساعت', value: '120' },
+                        ].map(preset => (
+                          <button
+                            type="button"
+                            key={preset.value}
+                            onClick={() => setAlarmMinutesPreset(preset.value)}
+                            className={`px-2.5 py-1.5 text-[10px] font-bold rounded-xl transition-all border cursor-pointer ${
+                              alarmMinutesPreset === preset.value
+                                ? 'bg-purple-50 dark:bg-purple-950/40 border-purple-500 text-purple-700 dark:text-purple-300 font-extrabold'
+                                : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50'
+                            }`}
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-slate-500 mr-1 block">انتخاب دقیق تاریخ و زمان آلارم *</label>
+                      <input
+                        type="datetime-local"
+                        value={alarmCustomDateTime}
+                        onChange={(e) => setAlarmCustomDateTime(e.target.value)}
+                        className="text-right w-full text-xs p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-1 focus:ring-purple-500 outline-none font-mono text-slate-800 dark:text-slate-100"
+                      />
+                    </div>
+                  )}
+
+                  {/* Alarm Note Description */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-500 mr-1 block">جزئیات تماس یا پیام یادآور آلارم</label>
+                    <input
+                      type="text"
+                      value={alarmNote}
+                      onChange={(e) => setAlarmNote(e.target.value)}
+                      placeholder="مثلاً: پیگیری تماس فوری با شماره مشتری، چک کردن وضعیت پاسخ و..."
+                      className="w-full text-xs p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-1 focus:ring-purple-500 outline-none text-slate-800 dark:text-slate-100"
+                    />
+                  </div>
+
+                  {/* Button to Submit Alarm */}
+                  <button
+                    type="button"
+                    onClick={handleAddAlarm}
+                    className="w-full py-2.5 px-4 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-xl text-xs font-bold shadow-md hover:shadow-lg transition-transform active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Clock className="w-4 h-4 ml-1" />
+                    ثبت و فعال‌سازی تایمر هشدار
+                  </button>
+                </div>
+
+                {/* Section: Active Alarm List */}
+                <div className="space-y-2.5">
+                  <h3 className="text-xs font-black text-slate-800 dark:text-slate-200">📋 آلارم‌های تنظیم شده مانیتورینگ ({alarms.length})</h3>
+                  <div className="max-h-[220px] overflow-y-auto space-y-2 pr-1">
+                    {alarms.length > 0 ? (
+                      alarms.map((alarm) => {
+                        const hasPrivilege = isSupervisor || alarm.creatorId === currentUser.id;
+                        return (
+                          <div 
+                            key={alarm.id} 
+                            className={`p-3 rounded-2xl border text-right flex items-center justify-between gap-3 ${
+                              alarm.triggered 
+                                ? 'bg-slate-50 dark:bg-slate-950/20 border-slate-200/50 dark:border-slate-800/80 text-slate-400'
+                                : 'bg-emerald-500/5 dark:bg-emerald-500/10 border-emerald-500/20 text-slate-800 dark:text-slate-100'
+                            }`}
+                          >
+                            <div className="space-y-1 overflow-hidden flex-1">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {alarm.triggered ? (
+                                  <span className="text-[8px] bg-slate-200 dark:bg-slate-800 text-slate-500 px-1.5 py-0.5 rounded-sm font-bold">زنگ خورده / آرشیو</span>
+                                ) : (
+                                  <span className="text-[8px] bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.5 rounded-sm font-bold animate-pulse">● فعال در انتظار پخش</span>
+                                )}
+                                <span className="text-[10px] text-slate-400">برای کارمند: <b>{alarm.targetUserName}</b></span>
+                              </div>
+                              <p className="text-xs font-bold text-indigo-600 dark:text-indigo-400 font-mono" dir="ltr">زمان: {formatAlarmTime(alarm.triggerTime)}</p>
+                              {alarm.note && (
+                                <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">سناریو/پیام: {alarm.note}</p>
+                              )}
+                              <p className="text-[8px] text-slate-400 italic">سازنده: {alarm.creatorName}</p>
+                            </div>
+
+                            {hasPrivilege && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveAlarm(alarm.id)}
+                                className="p-2 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/20 text-rose-600 dark:text-rose-400 border border-rose-200/30 dark:border-rose-900/30 rounded-xl cursor-pointer transition-colors shrink-0"
+                                title="حذف یادآوری"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="text-center py-6 text-slate-400 text-xs italic bg-slate-50 dark:bg-slate-950/10 rounded-2xl border border-slate-100 dark:border-slate-850">
+                        ⏳ هشداری برای این کار ثبت نشده است. از بالا بیفزایید.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {(!isEditMode || activeTab === 'edit') && (
+              /* Edit or Create Mode Field Fields */
+              <div className="space-y-4">
+                
+                {!canEditTitleAndDate && (
+                  <div className="p-3 bg-amber-500/10 border border-amber-500/25 rounded-xl text-right flex items-center gap-2">
+                    <AlertCircle className="w-4.5 h-4.5 text-amber-500 shrink-0" />
+                    <span className="text-[10px] sm:text-xs text-amber-700 dark:text-amber-400 font-bold leading-relaxed">
+                      شما ایجادکننده این تسک نیستید؛ ویرایش عنوان و تاریخ سررسید غیرفعال است (فقط ایجادکننده تسک مجاز به ویرایش است).
+                    </span>
+                  </div>
+                )}
+                
+                {/* Field 1: Title */}
+                <div className="space-y-1 text-right">
+                  <label className="text-xs font-bold text-slate-500 dark:text-slate-400 mr-1 block">عنوان یادداشت تسک *</label>
+                  <input
+                    type="text"
+                    required
+                    disabled={!canEditTitleAndDate}
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="مثلاً: پیگیری تماس گله‌مندی تاخیر ارسال فاکتور"
+                    className={`w-full text-xs p-3 border rounded-xl focus:ring-1 focus:ring-purple-500 outline-none ${
+                      !canEditTitleAndDate 
+                        ? 'bg-slate-100 dark:bg-slate-900/60 text-slate-400 dark:text-slate-500 cursor-not-allowed border-slate-200 dark:border-slate-800' 
+                        : 'bg-slate-50 dark:bg-slate-950/40 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-100 focus:bg-white dark:focus:bg-slate-900'
+                    }`}
+                  />
+                </div>
+
+                {/* Field 2: Description */}
+                <div className="space-y-1 text-right">
+                  <label className="text-xs font-bold text-slate-500 dark:text-slate-400 mr-1 block">سناریو و توضیحات کامل تماس</label>
+                  <textarea
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="مثال: اطلاعات تسک، شرح مشکل مشترک و توافق برای تماس جبرانی..."
+                    className="w-full text-xs p-3 bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800 rounded-xl focus:ring-1 focus:ring-purple-500 focus:bg-white dark:focus:bg-slate-900 outline-none h-24 resize-none text-slate-800 dark:text-slate-100"
+                  />
+                </div>
+
+                {/* Grid Fields Group: Status & Priority & Deadline */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  
+                  {/* Field 3: Status selection */}
+                  <div className="space-y-1 text-right">
+                    <label className="text-xs font-bold text-slate-500 dark:text-slate-400 mr-1 block">وضعیت فعلی برد</label>
+                    <select
+                      value={status}
+                      onChange={(e) => setStatus(e.target.value as TaskStatus)}
+                      className="w-full text-xs p-3 bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800 rounded-xl focus:ring-1 focus:ring-purple-500 outline-none text-slate-700 dark:text-slate-300"
+                    >
+                      <option value="todo">📋 در انتظار پاسخگویی</option>
+                      <option value="in_progress">⚡ در حال تماس/بررسی</option>
+                      <option value="done">✅ انجام و ثبت نهایی</option>
+                    </select>
+                  </div>
+
+                  {/* Field 4: Priority selection */}
+                  <div className="space-y-1 text-right">
+                    <label className="text-xs font-bold text-slate-500 dark:text-slate-400 mr-1 block">سطح اولویت اقدام</label>
+                    <select
+                      value={priority}
+                      onChange={(e) => setPriority(e.target.value as TaskPriority)}
+                      className="w-full text-xs p-3 bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800 rounded-xl focus:ring-1 focus:ring-purple-500 outline-none text-slate-700 dark:text-slate-300"
+                    >
+                      <option value="urgent">🔴 فوری (اقدام ضرب‌العجل)</option>
+                      <option value="high">🟠 مهم (تخصیص روزانه)</option>
+                      <option value="medium">🔵 متوسط (عادی شیفت)</option>
+                      <option value="low">🟢 عادی (سرریز کار)</option>
+                    </select>
+                  </div>
+
+                  {/* Field 5: Date Limit */}
+                  <div className="space-y-1 text-right sm:col-span-2">
+                    <label className="text-xs font-bold text-slate-500 dark:text-slate-400 mr-1 block">مهلت پاسخگویی / سررسید</label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        disabled={!canEditTitleAndDate}
+                        value={dueDate}
+                        onChange={(e) => setDueDate(e.target.value)}
+                        placeholder="مثال: ۱۴۰۵-۰۳-۱۰"
+                        className={`w-full text-xs p-3 pr-10 border rounded-xl focus:ring-1 focus:ring-purple-500 outline-none font-mono ${
+                          !canEditTitleAndDate 
+                            ? 'bg-slate-100 dark:bg-slate-900/60 text-slate-400 dark:text-slate-500 cursor-not-allowed border-slate-200 dark:border-slate-800'
+                            : 'bg-slate-50 dark:bg-slate-950/40 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-100 focus:bg-white dark:focus:bg-slate-900'
+                        }`}
+                      />
+                      <Calendar className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5 pointer-events-none" />
+                    </div>
+                  </div>
+
+                </div>
+
+                {/* Field 6: MultiUserSelect UI Component */}
+                <div className="space-y-1.5 text-right">
+                  <label className="text-xs font-bold text-slate-500 dark:text-slate-300 mr-1 block">
+                    اختصاص چند کاربر به تسک (انتخاب اپراتورهای کالسنتر)
+                  </label>
+                  
+                  {/* Custom Container styled for grid selections */}
+                  <div className="bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800 rounded-2xl p-3 max-h-[170px] overflow-y-auto space-y-2">
+                    {mockUsers.map((user) => {
+                      const isAssigned = assignedUsers.includes(user.id);
+                      return (
+                        <div
+                          key={user.id}
+                          onClick={() => handleToggleUser(user.id)}
+                          className={`flex items-center justify-between p-2 rounded-xl border cursor-pointer select-none transition-all ${
+                            isAssigned
+                              ? 'bg-purple-500/10 border-purple-400/80 dark:border-purple-500/40 text-purple-900 dark:text-purple-300'
+                              : 'bg-white dark:bg-slate-900 border-slate-100 dark:border-slate-800 text-slate-700 dark:text-slate-400 hover:border-slate-250 dark:hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            {/* Color Avatar */}
+                            <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold shadow-xs ${user.avatarColor} ${user.textColor}`}>
+                              {user.initials}
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold leading-tight">{user.name}</p>
+                              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">{user.role}</p>
+                            </div>
+                          </div>
+
+                          {/* Checkbox item */}
+                          <div className="flex items-center">
+                            <input
+                              type="checkbox"
+                              checked={isAssigned}
+                              onChange={() => {}} // Swallowed since parent handles click
+                              className="w-4.5 h-4.5 text-purple-600 rounded-xs border-slate-300 focus:ring-purple-500 dark:border-slate-700 pointer-events-none"
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Field 7: Checklist Builder (New Feature) */}
+                <div className="space-y-2 text-right border-t border-dashed border-slate-200 dark:border-slate-800 pt-4">
+                  <label className="text-xs font-bold text-slate-500 dark:text-slate-400 mr-1 block">📦 چک‌لیست بخش‌های اختصاصی تسک (اقدامات مجزا)</label>
+                  
+                  {/* Current checklist items list scroll box */}
+                  {checklist.length > 0 && (
+                    <div className="space-y-2 bg-slate-50 dark:bg-slate-950/40 border border-slate-150 dark:border-slate-850 rounded-2xl p-3 max-h-[150px] overflow-y-auto">
+                      {checklist.map((item) => (
+                        <div key={item.id} className="flex items-center justify-between bg-white dark:bg-slate-900 p-2 rounded-xl border border-slate-100 dark:border-slate-800 text-xs">
+                          <div className="flex items-center gap-2">
+                            <input 
+                              type="checkbox"
+                              checked={item.completed}
+                              onChange={() => {
+                                setChecklist(checklist.map(ch => 
+                                  ch.id === item.id ? { ...ch, completed: !ch.completed } : ch
+                                ));
+                              }}
+                              className="w-4 h-4 rounded text-purple-600 border-slate-300 dark:border-slate-700 focus:ring-purple-500 cursor-pointer"
+                            />
+                            <span className={item.completed ? 'line-through text-slate-400 font-medium' : 'font-semibold text-slate-700 dark:text-slate-300'}>
+                              {item.text}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setChecklist(checklist.filter(ch => ch.id !== item.id));
+                            }}
+                            className="p-1 text-rose-500 hover:text-white hover:bg-rose-500 rounded-lg transition-colors cursor-pointer"
+                            title="حذف آیتم"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Add new checklist item form elements row */}
+                  <div className="flex gap-2">
+                    <input 
+                      type="text"
+                      value={newChecklistItemText}
+                      onChange={(e) => setNewChecklistItemText(e.target.value)}
+                      placeholder="عنوان بخش جدید (مثلاً: تماس تاییدیه مالی، هماهنگی دیسپچ)"
+                      className="flex-grow text-xs p-2.5 bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800 rounded-xl focus:ring-1 focus:ring-purple-500 focus:bg-white dark:focus:bg-slate-900 outline-none text-slate-800 dark:text-slate-100"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          if (newChecklistItemText.trim()) {
+                            setChecklist([...checklist, {
+                              id: 'ch_' + Date.now() + Math.random().toString(36).substr(2, 4),
+                              text: newChecklistItemText.trim(),
+                              completed: false
+                            }]);
+                            setNewChecklistItemText('');
+                          }
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (newChecklistItemText.trim()) {
+                          setChecklist([...checklist, {
+                            id: 'ch_' + Date.now() + Math.random().toString(36).substr(2, 4),
+                            text: newChecklistItemText.trim(),
+                            completed: false
+                          }]);
+                          setNewChecklistItemText('');
+                        }
+                      }}
+                      className="px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer"
+                    >
+                      افزودن بخش
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+            )}
+
+            {/* Form actions for specifications edit/create */}
+            {(!isEditMode || activeTab === 'edit') && (
+              <div className="pt-4 border-t border-slate-150 dark:border-slate-800 flex justify-end gap-3 bg-slate-50/10 -m-6 p-6 mt-4">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold cursor-pointer transition-colors"
+                >
+                  انصراف
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-xl text-xs font-bold cursor-pointer shadow-md transition-colors flex items-center gap-1.5"
+                >
+                  <FileText className="w-4 h-4" />
+                  <span>{isEditMode ? 'ذخیره تغییرات تسک' : 'ایجاد تسک کالسنتر'}</span>
+                </button>
+              </div>
+            )}
+          </form>
+        </div>
+
+      </div>
+    </div>
+  );
+}
